@@ -1,14 +1,42 @@
-export function getCurrentPosition(): Promise<GeolocationPosition> {
+/**
+ * Abstract geolocation for Telegram Mini App.
+ * Tries browser Geolocation API (available in many Telegram WebViews).
+ */
+export interface UserLocation {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+}
+
+export function getUserLocation(timeoutMs = 15000): Promise<UserLocation> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error('Геолокация не поддерживается'));
+      reject(new Error('Геолокация недоступна в этом клиенте'));
       return;
     }
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 60000,
-    });
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        });
+      },
+      (err) => {
+        const messages: Record<number, string> = {
+          1: 'Доступ к геолокации запрещён',
+          2: 'Не удалось определить местоположение',
+          3: 'Таймаут определения местоположения',
+        };
+        reject(new Error(messages[err.code] ?? 'Ошибка геолокации'));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: timeoutMs,
+        maximumAge: 60_000,
+      },
+    );
   });
 }
 
