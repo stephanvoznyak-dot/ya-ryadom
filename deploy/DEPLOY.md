@@ -1,7 +1,10 @@
-# Деплой
+# Deploy
 
-См. docker-compose.yml и nginx.conf.
+```bash
+cp .env.example .env   # TOKEN, WEB_APP_URL, SERVICE_CHAT_ID
+pnpm install
+pnpm build:web
+pnpm start:bot         # or docker compose up -d
+```
 
-1. Скопировать `.env.example` → `.env`, заполнить токены и SERVICE_CHAT_ID.
-2. `pnpm install && pnpm build:web`
-3. `docker compose up -d`
+HTTPS + nginx: static `apps/web/dist`, proxy `/api` и `/bot` на процесс бота (:3000).
