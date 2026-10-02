@@ -180,70 +180,85 @@ async function stripGpsFromService(order: import('./store.js').Order) {
   }
 }
 
-function userFromInit(initData: string) {
-  return validateInitData(initData, TOKEN!);
-}
+// ── Команды и тонкий клиент ────────────────────────────────
 
-// ── Commands ──
 bot.command('start', async (ctx) => {
   const userId = ctx.from?.id;
   if (userId) setSession(userId, { step: 'idle' });
   await ctx.reply(
-    'Я рядом\n\nЗаявки рядом с вами. Можно работать прямо в боте или открыть Mini App.',
+    'Я рядом\n\n' +
+      'Заявки рядом с вами. Можно работать прямо в боте (тонкий клиент) или открыть Mini App.\n\n' +
+      '• «Мне нужно» — создать заявку\n' +
+      '• «Я могу» — посмотреть ближайшие и взять\n' +
+      '• «Мои заявки» — ваши взятые заявки',
     { reply_markup: mainKeyboard() },
   );
 });
 
 bot.command('app', async (ctx) => {
-  await ctx.reply('Откройте Mini App:', {
-    reply_markup: new InlineKeyboard().webApp('Открыть', WEB_APP_URL),
+  await ctx.reply('Открыть Mini App:', {
+    reply_markup: new InlineKeyboard().webApp('Открыть «Я рядом»', WEB_APP_URL),
   });
 });
 
 bot.command('cancel', async (ctx) => {
-  if (ctx.from) setSession(ctx.from.id, { step: 'idle' });
+  const userId = ctx.from?.id;
+  if (userId) setSession(userId, { step: 'idle' });
   await ctx.reply('Отменено.', { reply_markup: mainKeyboard() });
 });
 
-// ── Thin client: reply keyboard ──
 bot.hears('Мне нужно', async (ctx) => {
-  if (!ctx.from) return;
-  setSession(ctx.from.id, { step: 'create_location' });
-  await ctx.reply('Отправьте геолокацию — она нужна только для поиска рядом.', {
-    reply_markup: locationKeyboard(),
-  });
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  setSession(userId, { step: 'create_location' });
+  await ctx.reply(
+    'Создание заявки.\n\nОтправьте вашу текущую геолокацию (кнопка ниже). Координаты используются только для поиска рядом и не показываются другим пользователям.',
+    { reply_markup: locationKeyboard() },
+  );
 });
 
 bot.hears('Я могу', async (ctx) => {
-  if (!ctx.from) return;
-  setSession(ctx.from.id, { step: 'nearby_location' });
-  await ctx.reply('Отправьте геолокацию, чтобы увидеть заявки рядом.', {
-    reply_markup: locationKeyboard(),
-  });
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  setSession(userId, { step: 'nearby_location' });
+  await ctx.reply(
+    'Поиск заявок рядом.\n\nОтправьте вашу текущую геолокацию.',
+    { reply_markup: locationKeyboard() },
+  );
 });
 
 bot.hears('Мои заявки', async (ctx) => {
-  if (!ctx.from) return;
-  const items = listTakenBy(ctx.from.id);
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  setSession(userId, { step: 'idle' });
+  pruneExpired();
+  const items = listTakenBy(userId);
   if (items.length === 0) {
-    await ctx.reply('У вас нет взятых заявок.', { reply_markup: mainKeyboard() });
+    await ctx.reply('У вас нет активных взятых заявок.', { reply_markup: mainKeyboard() });
     return;
   }
   for (const o of items) {
-    await ctx.reply(toPublicCard(o), {
+    const text =
+      `📋 ${CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category}\n` +
+      `${o.description}\n` +
+      (o.destinationText ? `→ ${o.destinationText}\n` : '') +
+      `Заказчик: ${o.creatorName}${o.creatorUsername ? ` @${o.creatorUsername}` : ''}`;
+    await ctx.reply(text, {
       reply_markup: new InlineKeyboard().text('Завершить', `complete:${o.id}`),
     });
   }
+  await ctx.reply('Выберите действие или вернитесь в меню.', { reply_markup: mainKeyboard() });
 });
 
 bot.hears('Mini App', async (ctx) => {
-  await ctx.reply('Mini App:', {
-    reply_markup: new InlineKeyboard().webApp('Открыть', WEB_APP_URL),
+  await ctx.reply('Открыть приложение:', {
+    reply_markup: new InlineKeyboard().webApp('Открыть «Я рядом»', WEB_APP_URL),
   });
 });
 
 bot.hears(['Отмена', '« Отмена'], async (ctx) => {
-  if (ctx.from) setSession(ctx.from.id, { step: 'idle' });
+  const userId = ctx.from?.id;
+  if (userId) setSession(userId, { step: 'idle' });
   await ctx.reply('Отменено.', { reply_markup: mainKeyboard() });
 });
 
@@ -251,51 +266,72 @@ bot.on('message:location', async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   const loc = ctx.message.location;
-  if (!loc) return;
-  const s = getSession(userId);
+  const session = getSession(userId);
 
-  if (s.step === 'create_location') {
+  if (session.step === 'create_location') {
     setSession(userId, {
       step: 'create_category',
       draft: { latitude: loc.latitude, longitude: loc.longitude },
     });
-    await ctx.reply('Выберите категорию:', { reply_markup: categoryKeyboard() });
+    await ctx.reply('Геолокация получена. Выберите категорию:', {
+      reply_markup: categoryKeyboard(),
+    });
     return;
   }
 
-  if (s.step === 'nearby_location') {
+  if (session.step === 'nearby_location') {
     setSession(userId, {
       step: 'nearby_radius',
       latitude: loc.latitude,
       longitude: loc.longitude,
     });
-    await ctx.reply('Радиус поиска:', { reply_markup: radiusKeyboard('nrad') });
+    await ctx.reply('Геолокация получена. Выберите радиус поиска:', {
+      reply_markup: radiusKeyboard('nrad'),
+    });
     return;
   }
+
+  await ctx.reply('Геолокация сейчас не требуется. Используйте меню.', {
+    reply_markup: mainKeyboard(),
+  });
 });
 
 bot.on('message:text', async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  const text = ctx.message.text?.trim();
-  if (!text) return;
-  const s = getSession(userId);
+  const text = ctx.message.text.trim();
+  if (['Мне нужно', 'Я могу', 'Мои заявки', 'Mini App', 'Отмена', '« Отмена'].includes(text)) {
+    return;
+  }
+  if (text.startsWith('/')) return;
 
-  if (s.step === 'create_description') {
-    const draft = { ...s.draft, description: text };
-    setSession(userId, { step: 'create_radius', draft });
-    await ctx.reply('Радиус видимости заявки:', { reply_markup: radiusKeyboard('crad') });
+  const session = getSession(userId);
+
+  if (session.step === 'create_description') {
+    if (text.length < 3 || text.length > 500) {
+      await ctx.reply('Описание должно быть от 3 до 500 символов. Повторите:');
+      return;
+    }
+    setSession(userId, {
+      step: 'create_radius',
+      draft: { ...session.draft, description: text },
+    });
+    await ctx.reply('Выберите радиус действия заявки:', {
+      reply_markup: radiusKeyboard('crad'),
+    });
     return;
   }
 
-  if (s.step === 'create_destination') {
-    await finishCreate(ctx, userId, { ...s.draft, destinationText: text || undefined });
+  if (session.step === 'create_destination') {
+    const dest = text === '-' || text.toLowerCase() === 'нет' ? undefined : text.slice(0, 300);
+    const draft = { ...session.draft, destinationText: dest };
+    await finishCreate(ctx, userId, draft);
     return;
   }
 });
 
 async function finishCreate(
-  ctx: { reply: (t: string, extra?: object) => Promise<unknown>; from?: { id: number; first_name?: string; username?: string } },
+  ctx: { reply: (t: string, o?: object) => Promise<unknown>; from?: { id: number; first_name: string; username?: string } },
   userId: number,
   draft: CreateDraft,
 ) {
@@ -304,48 +340,55 @@ async function finishCreate(
     draft.longitude == null ||
     !draft.category ||
     !draft.description ||
-    !draft.radiusMeters
+    draft.radiusMeters == null
   ) {
     setSession(userId, { step: 'idle' });
-    await ctx.reply('Не хватает данных. Начните заново: «Мне нужно».', {
+    await ctx.reply('Данные заявки неполные. Начните заново: «Мне нужно».', {
       reply_markup: mainKeyboard(),
     });
     return;
   }
 
-  pruneExpired();
+  const from = ctx.from!;
   const order = addOrder({
     category: draft.category,
     description: draft.description,
+    destinationText: draft.destinationText,
     latitude: draft.latitude,
     longitude: draft.longitude,
-    destinationText: draft.destinationText,
     radiusMeters: draft.radiusMeters,
     creatorTelegramId: userId,
-    creatorName: ctx.from?.first_name || 'Пользователь',
-    creatorUsername: ctx.from?.username ?? null,
-    expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+    creatorName: from.first_name,
+    creatorUsername: from.username ?? null,
+    expiresInMinutes: 30,
   });
 
-  setSession(userId, { step: 'idle' });
   await postToServiceChat(order);
-  await ctx.reply(`Заявка создана.\n${toPublicCard(order)}`, {
-    reply_markup: mainKeyboard(),
-  });
+  setSession(userId, { step: 'idle' });
+
+  await ctx.reply(
+    `Заявка создана.\n\n` +
+      `📋 ${CATEGORY_LABELS[draft.category]}\n` +
+      `${draft.description}\n` +
+      (draft.destinationText ? `→ ${draft.destinationText}\n` : '') +
+      `Радиус: ${RADIUS_LABELS[draft.radiusMeters]}\n` +
+      `Действует 30 минут.`,
+    { reply_markup: mainKeyboard() },
+  );
 }
 
 bot.callbackQuery('cancel', async (ctx) => {
-  if (ctx.from) setSession(ctx.from.id, { step: 'idle' });
+  const userId = ctx.from.id;
+  setSession(userId, { step: 'idle' });
   await ctx.answerCallbackQuery();
   await ctx.reply('Отменено.', { reply_markup: mainKeyboard() });
 });
 
 bot.callbackQuery(/^cat:(.+)$/, async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  const s = getSession(userId);
-  if (s.step !== 'create_category') {
-    await ctx.answerCallbackQuery({ text: 'Устарело', show_alert: true });
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  if (session.step !== 'create_category') {
+    await ctx.answerCallbackQuery({ text: 'Сессия устарела', show_alert: true });
     return;
   }
   const cat = ctx.match![1] as (typeof CATEGORIES)[number];
@@ -355,126 +398,219 @@ bot.callbackQuery(/^cat:(.+)$/, async (ctx) => {
   }
   setSession(userId, {
     step: 'create_description',
-    draft: { ...s.draft, category: cat },
+    draft: { ...session.draft, category: cat },
   });
   await ctx.answerCallbackQuery();
-  await ctx.reply('Кратко опишите, что нужно (текстом):');
+  await ctx.editMessageText(
+    `Категория: ${CATEGORY_LABELS[cat]}\n\nНапишите краткое описание заявки (что нужно):`,
+  );
 });
 
 bot.callbackQuery(/^crad:(\d+)$/, async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  const s = getSession(userId);
-  if (s.step !== 'create_radius') {
-    await ctx.answerCallbackQuery({ text: 'Устарело', show_alert: true });
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  if (session.step !== 'create_radius') {
+    await ctx.answerCallbackQuery({ text: 'Сессия устарела', show_alert: true });
     return;
   }
-  const radiusMeters = Number(ctx.match![1]);
-  if (!RADII.includes(radiusMeters as (typeof RADII)[number])) {
+  const radius = Number(ctx.match![1]);
+  if (!(RADII as readonly number[]).includes(radius)) {
     await ctx.answerCallbackQuery({ text: 'Неверный радиус', show_alert: true });
     return;
   }
   setSession(userId, {
     step: 'create_destination',
-    draft: { ...s.draft, radiusMeters },
+    draft: { ...session.draft, radiusMeters: radius },
   });
   await ctx.answerCallbackQuery();
-  await ctx.reply(
-    'Пункт назначения (необязательно). Напишите текст или «-» чтобы пропустить:',
+  await ctx.editMessageText(
+    `Радиус: ${RADIUS_LABELS[radius]}\n\n` +
+      'Укажите пункт назначения или адрес (текстом), либо отправьте «-» / «нет», если не нужно:',
   );
 });
 
 bot.callbackQuery(/^nrad:(\d+)$/, async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  const s = getSession(userId);
-  if (s.step !== 'nearby_radius') {
-    await ctx.answerCallbackQuery({ text: 'Устарело', show_alert: true });
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  if (session.step !== 'nearby_radius') {
+    await ctx.answerCallbackQuery({ text: 'Сессия устарела', show_alert: true });
     return;
   }
   const radiusMeters = Number(ctx.match![1]);
-  await ctx.answerCallbackQuery();
+  if (!(RADII as readonly number[]).includes(radiusMeters)) {
+    await ctx.answerCallbackQuery({ text: 'Неверный радиус', show_alert: true });
+    return;
+  }
+
   pruneExpired();
-  const all = listOrders().filter((o) => o.status === 'OPEN');
-  const items = all
-    .map((o) => ({
-      order: o,
-      d: distanceMeters(s.latitude, s.longitude, o.latitude, o.longitude),
-    }))
-    .filter((x) => x.d <= radiusMeters)
-    .sort((a, b) => a.d - b.d)
+  const { latitude, longitude } = session;
+  const now = Date.now();
+
+  const items = listOrders()
+    .filter((o) => {
+      if (o.status !== 'OPEN') return false;
+      if (new Date(o.expiresAt).getTime() <= now) return false;
+      if (o.creatorTelegramId === userId) return false;
+      const dist = distanceMeters(latitude, longitude, o.latitude, o.longitude);
+      return dist <= radiusMeters && dist <= o.radiusMeters;
+    })
+    .map((o) => {
+      const dist = distanceMeters(latitude, longitude, o.latitude, o.longitude);
+      return { order: o, dist };
+    })
+    .sort((a, b) => a.dist - b.dist)
     .slice(0, 20);
 
   setSession(userId, { step: 'idle' });
+  await ctx.answerCallbackQuery();
+
   if (items.length === 0) {
-    await ctx.reply('Рядом открытых заявок нет.', { reply_markup: mainKeyboard() });
+    await ctx.editMessageText(
+      `Рядом (в радиусе ${RADIUS_LABELS[radiusMeters]}) открытых заявок не найдено.`,
+    );
+    await ctx.reply('Попробуйте другой радиус или позже.', { reply_markup: mainKeyboard() });
     return;
   }
-  for (const { order: o, d } of items) {
-    const km = d < 1000 ? `${Math.round(d)} м` : `${(d / 1000).toFixed(1)} км`;
-    await ctx.reply(`${toPublicCard(o)}\n📍 ~${km}`, {
+
+  await ctx.editMessageText(
+    `Найдено заявок: ${items.length} (радиус ${RADIUS_LABELS[radiusMeters]}).`,
+  );
+
+  for (const { order: o, dist } of items) {
+    const card =
+      `📋 ${CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category}\n` +
+      `${o.description}\n` +
+      (o.destinationText ? `→ ${o.destinationText}\n` : '') +
+      `≈ ${dist < 1000 ? `${dist} м` : `${(dist / 1000).toFixed(1)} км`}\n` +
+      `От: ${o.creatorName}`;
+    await ctx.reply(card, {
       reply_markup: new InlineKeyboard().text('Взять', `take:${o.id}`),
     });
   }
-  await ctx.reply('Готово.', { reply_markup: mainKeyboard() });
+  await ctx.reply('Выберите заявку или вернитесь в меню.', { reply_markup: mainKeyboard() });
 });
 
 bot.callbackQuery(/^take:(.+)$/, async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
   const orderId = ctx.match![1];
-  const updated = tryTake(orderId, userId, ctx.from?.first_name || 'Исполнитель');
-  if (!updated) {
-    await ctx.answerCallbackQuery({ text: 'Уже недоступна', show_alert: true });
-    return;
+  const from = ctx.from;
+  if (!from) return ctx.answerCallbackQuery({ text: 'Ошибка', show_alert: true });
+
+  pruneExpired();
+  const before = getOrder(orderId);
+  if (before && before.creatorTelegramId === from.id) {
+    return ctx.answerCallbackQuery({ text: 'Это ваша заявка', show_alert: true });
   }
+
+  const updated = tryTake(orderId, {
+    telegramId: from.id,
+    name: from.first_name,
+    username: from.username ?? null,
+  });
+  if (!updated) {
+    return ctx.answerCallbackQuery({ text: 'Уже недоступна', show_alert: true });
+  }
+  const order = updated;
+
   await stripGpsFromService(updated);
-  await ctx.answerCallbackQuery({ text: 'Взято' });
+  await ctx.answerCallbackQuery({ text: 'Заявка взята' });
+
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  } catch {
+    /* */
+  }
+
   try {
     await bot.api.sendMessage(
-      updated.creatorTelegramId,
-      `Вашу заявку взяли.\n${updated.description}`,
+      order.creatorTelegramId,
+      `Вашу заявку взяли!\n${order.description}\nИсполнитель: ${from.first_name}${from.username ? ` @${from.username}` : ''}`,
     );
   } catch {
-    /* ignore */
+    /* */
   }
-  await ctx.reply(`Вы взяли заявку.\n${toPublicCard(updated)}`, {
-    reply_markup: new InlineKeyboard().text('Завершить', `complete:${updated.id}`),
-  });
+  try {
+    await bot.api.sendMessage(
+      from.id,
+      `Вы взяли заявку!\n${order.description}\nЗаказчик: ${order.creatorName}${order.creatorUsername ? ` @${order.creatorUsername}` : ''}\n\nКогда выполните — откройте «Мои заявки» и нажмите «Завершить».`,
+      { reply_markup: mainKeyboard() },
+    );
+  } catch {
+    /* */
+  }
 });
 
 bot.callbackQuery(/^complete:(.+)$/, async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
   const orderId = ctx.match![1];
+  const userId = ctx.from.id;
+
   const updated = tryComplete(orderId, userId);
   if (!updated) {
-    await ctx.answerCallbackQuery({ text: 'Нельзя завершить', show_alert: true });
-    return;
+    return ctx.answerCallbackQuery({
+      text: 'Заявку нельзя завершить',
+      show_alert: true,
+    });
   }
+
   await stripGpsFromService(updated);
-  await ctx.answerCallbackQuery({ text: 'Выполнено' });
+  await ctx.answerCallbackQuery({ text: 'Заявка выполнена' });
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  } catch {
+    /* */
+  }
+
   try {
     await bot.api.sendMessage(
       updated.creatorTelegramId,
       `Заявка выполнена.\n${updated.description}`,
     );
   } catch {
-    /* ignore */
+    /* */
   }
-  await ctx.reply('Заявка отмечена выполненной.', { reply_markup: mainKeyboard() });
+
+  await ctx.reply('Заявка отмечена как выполненная.', { reply_markup: mainKeyboard() });
 });
 
 bot.catch((err) => console.error('Bot error', err));
 
-// ── Mini App API ──
+// ── Mini API (для Mini App) ────────────────────────────────
+
+const createSchema = z.object({
+  initData: z.string().min(1),
+  category: z.enum(CATEGORIES),
+  description: z.string().min(3).max(500),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  destinationText: z.string().max(300).optional(),
+  radiusMeters: z.number().refine((v) => (RADII as readonly number[]).includes(v)),
+  expiresInMinutes: z.number().int().min(5).max(1440).default(30),
+});
+
+const nearbySchema = z.object({
+  initData: z.string().min(1),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radiusMeters: z.number().refine((v) => (RADII as readonly number[]).includes(v)).default(5000),
+});
+
+const takeSchema = z.object({
+  initData: z.string().min(1),
+  orderId: z.string().uuid(),
+});
+
+function userFromInit(initData: string) {
+  const u = validateInitData(initData, TOKEN!);
+  if (!u) return null;
+  return u;
+}
+
 const app = Fastify({ logger: false });
 await app.register(cors, { origin: true });
 
 app.get('/health', async () => ({ status: 'ok' }));
 
 app.post('/api/auth', async (req, reply) => {
-  const body = z.object({ initData: z.string().min(1) }).safeParse(req.body);
+  const body = z.object({ initData: z.string() }).safeParse(req.body);
   if (!body.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
   const user = userFromInit(body.data.initData);
   if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
@@ -488,112 +624,119 @@ app.post('/api/auth', async (req, reply) => {
   });
 });
 
-const createSchema = z.object({
-  initData: z.string().min(1),
-  category: z.enum(CATEGORIES),
-  description: z.string().min(3).max(500),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-  destinationText: z.string().max(300).optional(),
-  radiusMeters: z.number().int().positive(),
-  expiresInMinutes: z.number().int().min(5).max(240).default(30),
-});
-
 app.post('/api/orders', async (req, reply) => {
   const parsed = createSchema.safeParse(req.body);
-  if (!parsed.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
+  if (!parsed.success) return reply.status(400).send({ error: 'Validation failed' });
   const user = userFromInit(parsed.data.initData);
   if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
 
-  pruneExpired();
+  const d = parsed.data;
   const order = addOrder({
-    category: parsed.data.category,
-    description: parsed.data.description,
-    latitude: parsed.data.latitude,
-    longitude: parsed.data.longitude,
-    destinationText: parsed.data.destinationText,
-    radiusMeters: parsed.data.radiusMeters,
+    category: d.category,
+    description: d.description,
+    destinationText: d.destinationText,
+    latitude: d.latitude,
+    longitude: d.longitude,
+    radiusMeters: d.radiusMeters,
     creatorTelegramId: user.id,
-    creatorName: user.first_name || 'Пользователь',
+    creatorName: user.first_name,
     creatorUsername: user.username ?? null,
-    expiresAt: new Date(Date.now() + parsed.data.expiresInMinutes * 60_000).toISOString(),
+    expiresInMinutes: d.expiresInMinutes,
   });
+
   await postToServiceChat(order);
-  return reply.send({ id: order.id, status: order.status });
+
+  return reply.status(201).send({
+    id: order.id,
+    status: order.status,
+    expiresAt: order.expiresAt,
+  });
 });
 
 app.post('/api/orders/nearby', async (req, reply) => {
-  const body = z
-    .object({
-      initData: z.string().min(1),
-      latitude: z.number(),
-      longitude: z.number(),
-      radiusMeters: z.number().int().positive().default(5000),
-    })
-    .safeParse(req.body);
-  if (!body.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
-  const user = userFromInit(body.data.initData);
+  const parsed = nearbySchema.safeParse(req.body);
+  if (!parsed.success) return reply.status(400).send({ error: 'Invalid query' });
+  const user = userFromInit(parsed.data.initData);
   if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
 
   pruneExpired();
-  const { latitude, longitude, radiusMeters } = body.data;
+  const { latitude, longitude, radiusMeters } = parsed.data;
+  const now = Date.now();
+
   const items = listOrders()
-    .filter((o) => o.status === 'OPEN' && o.creatorTelegramId !== user.id)
-    .map((o) => ({
-      id: o.id,
-      category: o.category,
-      description: o.description,
-      destinationText: o.destinationText,
-      creatorName: o.creatorName,
-      distanceMeters: Math.round(distanceMeters(latitude, longitude, o.latitude, o.longitude)),
-    }))
-    .filter((x) => x.distanceMeters <= radiusMeters)
-    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .filter((o) => {
+      if (o.status !== 'OPEN') return false;
+      if (new Date(o.expiresAt).getTime() <= now) return false;
+      if (o.creatorTelegramId === user.id) return false;
+      const dist = distanceMeters(latitude, longitude, o.latitude, o.longitude);
+      return dist <= radiusMeters && dist <= o.radiusMeters;
+    })
+    .map((o) => {
+      const dist = distanceMeters(latitude, longitude, o.latitude, o.longitude);
+      return toPublicCard(o, dist);
+    })
+    .sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0))
     .slice(0, 50);
+
   return reply.send({ items });
 });
 
-const orderIdSchema = z.object({
-  initData: z.string().min(1),
-  orderId: z.string().uuid(),
-});
-
 app.post('/api/orders/take', async (req, reply) => {
-  const parsed = orderIdSchema.safeParse(req.body);
+  const parsed = takeSchema.safeParse(req.body);
   if (!parsed.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
   const user = userFromInit(parsed.data.initData);
   if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
 
-  const updated = tryTake(
-    parsed.data.orderId,
-    user.id,
-    user.first_name || 'Исполнитель',
-  );
-  if (!updated) {
-    return reply.status(409).send({
-      error: 'ORDER_NOT_AVAILABLE',
-      message: 'Заявка уже недоступна',
-    });
+  pruneExpired();
+  const existing = getOrder(parsed.data.orderId);
+  if (existing && existing.creatorTelegramId === user.id) {
+    return reply.status(409).send({ error: 'ORDER_NOT_AVAILABLE', message: 'Нельзя взять свою заявку' });
   }
+
+  const updated = tryTake(parsed.data.orderId, {
+    telegramId: user.id,
+    name: user.first_name,
+    username: user.username ?? null,
+  });
+  if (!updated) {
+    return reply.status(409).send({ error: 'ORDER_NOT_AVAILABLE', message: 'Заявка уже недоступна' });
+  }
+  const order = updated;
+
   await stripGpsFromService(updated);
 
   let creatorNotified = false;
+  let takerNotified = false;
   try {
     await bot.api.sendMessage(
-      updated.creatorTelegramId,
-      `Вашу заявку взяли.\n${updated.description}`,
+      order.creatorTelegramId,
+      `Вашу заявку взяли!\n${order.description}\nИсполнитель: ${user.first_name}${user.username ? ` @${user.username}` : ''}`,
     );
     creatorNotified = true;
   } catch {
-    /* ignore */
+    /* */
+  }
+  try {
+    await bot.api.sendMessage(
+      user.id,
+      `Вы взяли заявку!\n${order.description}\nЗаказчик: ${order.creatorName}${order.creatorUsername ? ` @${order.creatorUsername}` : ''}`,
+    );
+    takerNotified = true;
+  } catch {
+    /* */
   }
 
   return reply.send({
     id: updated.id,
     status: 'TAKEN',
     message: 'Заявка взята',
-    notifications: { creatorNotified, takerNotified: true },
+    notifications: { creatorNotified, takerNotified },
   });
+});
+
+const orderIdSchema = z.object({
+  initData: z.string().min(1),
+  orderId: z.string().uuid(),
 });
 
 app.post('/api/orders/mine', async (req, reply) => {
@@ -636,7 +779,7 @@ app.post('/api/orders/complete', async (req, reply) => {
       `Заявка выполнена.\n${updated.description}`,
     );
   } catch {
-    /* ignore */
+    /* */
   }
 
   return reply.send({
