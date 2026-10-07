@@ -1,8 +1,6 @@
 node_modules/
 dist/
 .env
-.env.local
 *.log
-apps/bot/data/orders.json
 .DS_Store
-*.zip
+apps/bot/data/orders.json

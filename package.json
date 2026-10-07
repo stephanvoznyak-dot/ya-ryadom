@@ -1,14 +1,10 @@
 {
   "name": "ya-ryadom",
   "private": true,
-  "version": "0.2.0",
-  "description": "Я рядом — Mini App + служебный чат (хроника)",
   "scripts": {
     "dev:bot": "pnpm --filter @ya-ryadom/bot dev",
     "dev:web": "pnpm --filter @ya-ryadom/web dev",
     "build:web": "pnpm --filter @ya-ryadom/web build",
     "start:bot": "pnpm --filter @ya-ryadom/bot start"
-  },
-  "engines": { "node": ">=22" },
-  "packageManager": "pnpm@9.15.0"
+  }
 }
