@@ -1,85 +1,147 @@
-# Я рядом (ya-ryadom)
+# Ya Ryadom (Я рядом)
 
-Экспериментальный MVP сервиса локальных заявок («помощь рядом»).
+Experimental MVP of a local help-request service — “help nearby”.
 
-**Стек:** Telegram Mini App + Bot + JSON-store + нативный модуль для Telegram X (Android).
+Built as a **Telegram Mini App + Bot** with an optional **native Android module** for Telegram X.  
+No PostgreSQL. The single source of truth is a JSON file store.
 
-Без PostgreSQL. Источник истины — `data/orders.json`.
+---
 
-## Возможности
+## Features
 
-- Создание заявок («Мне нужно») с категорией, описанием, радиусом и сроком
-- Поиск и взятие открытых заявок рядом («Я могу») по GPS
-- Завершение взятых заявок
-- Работа через Mini App **или** тонкий клиент бота
-- Нативный Android-модуль для Telegram X с HMAC-авторизацией
+- Create requests (“I need help”) with category, description, search radius and lifetime
+- Discover and claim open requests nearby (“I can help”) using GPS
+- Complete claimed requests
+- Works entirely through the Telegram bot **or** the Mini App
+- Native Android client for Telegram X with HMAC-signed authentication
 
-## Структура репозитория
+---
+
+## Project Structure
 
 ```
 ya-ryadom/
 ├── apps/
-│   ├── bot/          # Node.js бот + REST API (Grammy + Fastify)
-│   └── web/          # React Mini App (Vite + TypeScript)
-├── android-module/   # Модуль для интеграции в Telegram X
+│   ├── bot/                 # Node.js bot + REST API (Grammy + Fastify)
+│   └── web/                 # React Mini App (Vite + TypeScript)
+├── android-module/          # Drop-in module for Telegram X
 │   ├── YaRyadomController.kt
 │   ├── data/
 │   ├── ui/
 │   ├── util/
 │   ├── backend-native-auth-patch.ts
 │   └── INTEGRATION.md
-├── deploy/           # nginx + инструкции
+├── deploy/                  # nginx config & deployment notes
 ├── docker-compose.yml
 └── ...
 ```
 
-## Быстрый запуск (backend + Mini App)
+---
+
+## Quick Start (Backend + Mini App)
 
 ```bash
 cp .env.example .env
-# Заполните TOKEN, WEB_APP_URL, SERVICE_CHAT_ID
-# Для native-клиента также: NATIVE_CLIENT_SECRET=...
+# Fill in:
+#   TOKEN              – Telegram bot token
+#   WEB_APP_URL        – public URL of the Mini App
+#   SERVICE_CHAT_ID    – private service group (operator chronicle)
+#   NATIVE_CLIENT_SECRET – long random secret for Android native client (HMAC)
 
 pnpm install
-pnpm --filter @ya-ryadom/bot smoke   # проверка атомарности TAKE
-pnpm dev:bot
-pnpm dev:web
+
+# Optional: verify atomic TAKE invariant
+pnpm --filter @ya-ryadom/bot smoke
+
+pnpm dev:bot          # starts the bot + API
+pnpm dev:web          # starts the Mini App (Vite)
 ```
 
-Production: `docker compose up -d` или `pnpm build:web && pnpm start:bot`.
+Production:
 
-## Нативный модуль Telegram X
+```bash
+pnpm build:web
+pnpm start:bot
+# or
+docker compose up -d
+```
 
-См. подробную инструкцию:
+---
+
+## Native Telegram X Module
+
+See the detailed guide:
 
 **[android-module/INTEGRATION.md](android-module/INTEGRATION.md)**
 
-Кратко:
-1. Скопировать `android-module/` → `app/src/main/java/org/thunderdog/challegram/yaryadom/`
-2. Применить `backend-native-auth-patch.ts` и задать `NATIVE_CLIENT_SECRET`
-3. Подключить контроллер в навигацию Telegram X
-4. Собрать APK
+Short version:
 
-Форк Telegram X с уже интегрированным модулем:  
+1. Copy the contents of `android-module/` into  
+   `app/src/main/java/org/thunderdog/challegram/yaryadom/`
+2. Apply `backend-native-auth-patch.ts` and set `NATIVE_CLIENT_SECRET`
+3. Wire the controller into Telegram X navigation
+4. Build the APK
+
+A fork of Telegram X with the module already integrated:  
 https://github.com/stephanvoznyak-dot/telegram-x
 
-## Инварианты
+---
 
-1. Одна заявка может быть взята только одним исполнителем (`tryTake` атомарный).
-2. Источник истины — `orders.json`, не сообщения Telegram.
-3. GPS-координаты чужих заявок никогда не отдаются в публичные ответы API.
-4. Служебный чат используется только как хроника для оператора.
+## Core Invariants
+
+1. **One request → one taker**  
+   `tryTake()` is synchronous (load → check → save, no `await`).
+
+2. **Source of truth**  
+   `data/orders.json`, not Telegram messages.
+
+3. **Privacy of location**  
+   GPS coordinates of other users’ requests are never returned in public API responses.
+
+4. **Service chat**  
+   Used only as an operator chronicle. After a request is taken, the location line is removed from the service message.
+
+---
 
 ## API
 
-Все эндпоинты — `POST`, авторизация через `initData` (Mini App) или HMAC-подпись (native):
+All endpoints are `POST`.  
+Authentication:
 
-- `/api/orders` — создание
-- `/api/orders/nearby` — поиск рядом
-- `/api/orders/take` — атомарный захват
-- `/api/orders/mine` — мои взятые
-- `/api/orders/complete` — завершение
+- Mini App → Telegram `initData`
+- Native client → HMAC-SHA256 signature (`userId:firstName:timestamp`)
 
-## Лицензия
+| Endpoint                | Description                    |
+|-------------------------|--------------------------------|
+| `/api/orders`           | Create a new request           |
+| `/api/orders/nearby`    | Find open requests nearby      |
+| `/api/orders/take`      | Atomically claim a request     |
+| `/api/orders/mine`      | List requests claimed by me    |
+| `/api/orders/complete`  | Mark a request as completed    |
+| `/health`               | Health check                   |
 
-Приватный экспериментальный проект.
+---
+
+## Categories
+
+`DELIVERY` · `RIDE` · `HELP` · `SHOPPING` · `REPAIR` · `CLEANING` · `COMPUTER` · `RENTAL` · `OTHER`
+
+Search radii: 1 / 2 / 5 / 10 / 20 km.
+
+---
+
+## Tech Stack
+
+| Layer          | Technology                          |
+|----------------|-------------------------------------|
+| Bot + API      | Node.js 22+, Grammy, Fastify, Zod   |
+| Mini App       | React, Vite, TypeScript             |
+| Storage        | Atomic JSON file (`tmp` + rename)   |
+| Native client  | Kotlin (Telegram X module)          |
+| Deploy         | Docker Compose + nginx              |
+
+---
+
+## License
+
+Private experimental project.
