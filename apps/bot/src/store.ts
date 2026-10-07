@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, '..', 'data');
 const ORDERS_PATH = join(DATA_DIR, 'orders.json');
 
 export type OrderStatus = 'OPEN' | 'TAKEN' | 'COMPLETED' | 'CANCELLED';
@@ -38,10 +38,16 @@ function ensureDataDir() {
 export function loadOrders(): Order[] {
   ensureDataDir();
   if (!existsSync(ORDERS_PATH)) return [];
+  const raw = readFileSync(ORDERS_PATH, 'utf8');
   try {
-    return JSON.parse(readFileSync(ORDERS_PATH, 'utf8'));
-  } catch {
-    return [];
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) {
+      throw new Error('orders.json is not an array');
+    }
+    return data;
+  } catch (e) {
+    console.error('FATAL: failed to parse orders.json — refusing to continue with empty state', e);
+    throw e;
   }
 }
 
