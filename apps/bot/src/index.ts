@@ -1,20 +1,17 @@
 /**
- * «Я рядом» — Mini App + тонкий Telegram-клиент (бот).
+ * Ya Ryadom — Mini App + thin Telegram bot client.
  *
- * Источник истины — JSON-store. Служебный чат — хроника (с GPS для оператора).
- * Пользователи могут работать полностью через бота или через Mini App.
- *
- * Native client (Telegram X) поддерживается через HMAC-подпись (NATIVE_CLIENT_SECRET).
+ * Source of truth: JSON store. Service chat = operator chronicle.
+ * Native Android client supported via HMAC (NATIVE_CLIENT_SECRET).
  */
 
 import Fastify from 'fastify';
-import { Bot, GrammyError, HttpError, InlineKeyboard, Keyboard } from 'grammy';
+import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { haversineMeters } from './geo.js';
-import { loadOrders, saveOrders, tryTake, type Order, type OrderStatus } from './store.js';
+import { loadOrders, saveOrders, tryTake, type Order } from './store.js';
 import { validateInitData, type TgUser } from './telegram-auth.js';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as messages from './messages.js';
 
 const TOKEN = process.env.TOKEN!;
@@ -23,6 +20,9 @@ const SERVICE_CHAT_ID = process.env.SERVICE_CHAT_ID ? Number(process.env.SERVICE
 const NATIVE_CLIENT_SECRET = process.env.NATIVE_CLIENT_SECRET || '';
 const PORT = Number(process.env.PORT || 3000);
 
+/** Shared category list — keep in sync with Mini App and Android */
+const CATEGORIES = ['RIDE', 'DELIVERY', 'REPAIR', 'CLEANING', 'SHOPPING', 'COMPUTER', 'HELP', 'RENTAL', 'OTHER'] as const;
+
 if (!TOKEN) {
   console.error('TOKEN is required');
   process.exit(1);
@@ -30,10 +30,6 @@ if (!TOKEN) {
 
 const bot = new Bot(TOKEN);
 const app = Fastify({ logger: true });
-
-// ---------------------------------------------------------------------------
-// Native client auth helper
-// ---------------------------------------------------------------------------
 
 function verifyNativeSignature(
   userId: number,
@@ -80,10 +76,6 @@ function resolveUser(body: any): TgUser | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Schemas
-// ---------------------------------------------------------------------------
-
 const nativeFields = {
   nativeClient: z.literal(true).optional(),
   userId: z.number().int().positive().optional(),
@@ -96,7 +88,7 @@ const nativeFields = {
 
 const createSchema = z.object({
   ...nativeFields,
-  category: z.enum(['RIDE', 'DELIVERY', 'REPAIR', 'CLEANING', 'SHOPPING', 'COMPUTER', 'HELP', 'RENTAL', 'OTHER']),
+  category: z.enum(CATEGORIES),
   description: z.string().min(3).max(500),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
@@ -125,6 +117,24 @@ const orderIdSchema = z.object({
 // ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
+
+/** Login / session check for Mini App */
+app.post('/api/auth', async (req, reply) => {
+  const parsed = z.object({ ...nativeFields }).safeParse(req.body);
+  if (!parsed.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
+
+  const user = resolveUser(parsed.data);
+  if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
+
+  return {
+    user: {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name ?? null,
+      username: user.username ?? null,
+    },
+  };
+});
 
 app.post('/api/orders', async (req, reply) => {
   const parsed = createSchema.safeParse(req.body);
@@ -157,7 +167,6 @@ app.post('/api/orders', async (req, reply) => {
   orders.push(order);
   saveOrders(orders);
 
-  // Post to service chat
   if (SERVICE_CHAT_ID) {
     try {
       const text = messages.formatNewOrder(order);
@@ -189,12 +198,13 @@ app.post('/api/orders/nearby', async (req, reply) => {
       o.creatorId !== user.id
   );
 
+  // Visibility = intersection of order radius and searcher radius
   const items = orders
     .map((o) => {
       const dist = haversineMeters(latitude, longitude, o.latitude, o.longitude);
       return { order: o, dist };
     })
-    .filter((x) => x.dist <= radiusMeters)
+    .filter((x) => x.dist <= Math.min(radiusMeters, x.order.radiusMeters))
     .sort((a, b) => a.dist - b.dist)
     .slice(0, 30)
     .map(({ order: o, dist }) => ({
@@ -229,7 +239,6 @@ app.post('/api/orders/take', async (req, reply) => {
 
   const order = result.order!;
 
-  // Edit service message (remove GPS)
   if (order.serviceChatId && order.serviceMessageId) {
     try {
       const text = messages.formatTakenOrder(order);
@@ -241,7 +250,6 @@ app.post('/api/orders/take', async (req, reply) => {
     }
   }
 
-  // Notify creator
   let creatorNotified = false;
   try {
     await bot.api.sendMessage(
@@ -308,10 +316,9 @@ app.post('/api/orders/complete', async (req, reply) => {
 app.get('/health', async () => ({ ok: true }));
 
 // ---------------------------------------------------------------------------
-// Bot handlers (thin client)
+// Bot handlers
 // ---------------------------------------------------------------------------
 
-// Simple in-memory dialog state
 const dialogs = new Map<number, { step: string; data: any }>();
 
 bot.command('start', async (ctx) => {
@@ -364,19 +371,18 @@ bot.on('message:location', async (ctx) => {
     state.data.lng = longitude;
     state.step = 'need_category';
     const kb = new InlineKeyboard();
-    ['DELIVERY', 'RIDE', 'HELP', 'SHOPPING', 'REPAIR', 'OTHER'].forEach((c) =>
-      kb.text(c, `cat:${c}`).row()
-    );
+    // Unified categories
+    CATEGORIES.forEach((c) => kb.text(c, `cat:${c}`).row());
     await ctx.reply('Выберите категорию:', { reply_markup: kb });
   } else if (state.step === 'can_location') {
-    // nearby search
     const now = Date.now();
     const orders = loadOrders().filter(
       (o) => o.status === 'OPEN' && new Date(o.expiresAt).getTime() > now && o.creatorId !== ctx.from!.id
     );
+    const searchRadius = 5000;
     const nearby = orders
       .map((o) => ({ o, d: haversineMeters(latitude, longitude, o.latitude, o.longitude) }))
-      .filter((x) => x.d <= 5000)
+      .filter((x) => x.d <= Math.min(searchRadius, x.o.radiusMeters))
       .sort((a, b) => a.d - b.d)
       .slice(0, 10);
 
@@ -501,15 +507,9 @@ bot.callbackQuery(/^complete:(.+)$/, async (ctx) => {
   } catch {}
 });
 
-// ---------------------------------------------------------------------------
-// Start
-// ---------------------------------------------------------------------------
-
 async function start() {
   app.listen({ port: PORT, host: '0.0.0.0' });
-  bot.start({
-    onStart: () => console.log('Bot started'),
-  });
+  bot.start({ onStart: () => console.log('Bot started') });
   console.log(`API on :${PORT}, nativeClient=${!!NATIVE_CLIENT_SECRET}, service chat=${SERVICE_CHAT_ID || 'off'}`);
 }
 
