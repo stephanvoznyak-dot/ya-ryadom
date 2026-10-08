@@ -1,12 +1,12 @@
 /**
- * Source of truth for orders = this JSON store (single Node process).
- * Service Telegram chat = chronicle only, not a database.
+ * Источник истины по заявкам = этот JSON-store (один процесс Node).
+ * Служебный Telegram-чат = только хроника/публикация, не БД.
  *
- * Invariants:
- * 1. One OPEN order → exactly one TAKE winner (tryTake is synchronous).
- * 2. GPS stays in store for matching; never returned in public API responses.
- * 3. After COMPLETE/CANCEL coordinates are scrubbed (privacy).
- * 4. Only one bot instance: horizontal scaling breaks tryTake.
+ * Инварианты:
+ * 1. Одна OPEN-заявка → ровно один победитель TAKE (tryTake синхронный).
+ * 2. GPS в store для матчинга; в ответы Mini App не попадает (toPublicCard).
+ * 3. После COMPLETE/CANCEL координаты обнуляются (privacy).
+ * 4. Только один инстанс бота: горизонтальное масштабирование ломает tryTake.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -52,7 +52,7 @@ function load(): Order[] {
     }
     return data as Order[];
   } catch (e) {
-    // Hard-fail: empty fallback would silently lose all open orders
+    // Hard-fail: empty state would silently lose all open orders
     console.error('FATAL: failed to parse orders.json — refusing empty fallback', e);
     throw e;
   }
@@ -71,7 +71,7 @@ function save(orders: Order[]) {
   fs.renameSync(tmp, FILE);
 }
 
-/** Scrub GPS after order is no longer needed for matching */
+/** Scrub GPS after order is no longer OPEN/TAKEN for matching */
 function scrubCoords(o: Order): Order {
   if (o.status === 'COMPLETED' || o.status === 'CANCELLED') {
     return { ...o, latitude: 0, longitude: 0 };
@@ -131,10 +131,10 @@ export function updateOrder(id: string, patch: Partial<Order>): Order | null {
 }
 
 /**
- * Atomic TAKE for a single Node process:
- * load → check OPEN → write TAKEN → save without await inside.
- * Two parallel HTTP requests in one process will not both see OPEN.
- * Multiple instances / cluster — not supported.
+ * Атомарный TAKE для одного Node-процесса:
+ * load → check OPEN → write TAKEN → save без await внутри.
+ * Два параллельных HTTP-запроса в одном процессе не разделят «OPEN».
+ * Несколько инстансов / кластер — не поддерживаются.
  */
 export function tryTake(
   orderId: string,
@@ -178,7 +178,10 @@ export function pruneExpired() {
   if (changed) save(orders);
 }
 
-/** Close order by taker: TAKEN → COMPLETED. Only taker; second complete → null. */
+/**
+ * Закрытие заявки исполнителем: TAKEN → COMPLETED.
+ * Только taker; повторный complete → null. GPS scrubbed.
+ */
 export function tryComplete(orderId: string, telegramUserId: number): Order | null {
   const orders = load();
   const i = orders.findIndex((o) => o.id === orderId);
@@ -196,7 +199,7 @@ export function tryComplete(orderId: string, telegramUserId: number): Order | nu
   return orders[i];
 }
 
-/** Active orders taken by user (not yet completed) */
+/** Активные заявки, взятые пользователем (ещё не завершённые) */
 export function listTakenBy(telegramUserId: number): Order[] {
   return load().filter(
     (o) => o.status === 'TAKEN' && o.takerTelegramId === telegramUserId,
