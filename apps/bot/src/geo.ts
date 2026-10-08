@@ -1,9 +1,9 @@
 /** Haversine distance in meters */
-export function haversineMeters(
+export function distanceMeters(
   lat1: number,
   lon1: number,
   lat2: number,
-  lon2: number
+  lon2: number,
 ): number {
   const R = 6371000;
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -12,5 +12,5 @@ export function haversineMeters(
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
