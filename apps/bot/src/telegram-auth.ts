@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export type TgUser = {
   id: number;
@@ -7,8 +7,16 @@ export type TgUser = {
   username?: string;
 };
 
-/** Validate Telegram WebApp initData and extract user */
-export function validateInitData(initData: string, botToken: string): TgUser | null {
+/**
+ * Validate Telegram WebApp initData.
+ * - HMAC with bot token (WebAppData)
+ * - auth_date TTL (default 1 hour; was 24h — tightened)
+ */
+export function validateInitData(
+  initData: string,
+  botToken: string,
+  maxAgeSeconds = 3600,
+): TgUser | null {
   try {
     const params = new URLSearchParams(initData);
     const hash = params.get('hash');
@@ -23,11 +31,17 @@ export function validateInitData(initData: string, botToken: string): TgUser | n
     const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
     const calculated = createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-    if (calculated !== hash) return null;
+    const a = Buffer.from(calculated, 'utf8');
+    const b = Buffer.from(hash, 'utf8');
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
-    const userStr = params.get('user');
-    if (!userStr) return null;
-    const user = JSON.parse(userStr);
+    const authDate = Number(params.get('auth_date'));
+    if (!Number.isFinite(authDate) || Date.now() / 1000 - authDate > maxAgeSeconds) {
+      return null;
+    }
+
+    const user = JSON.parse(params.get('user') || 'null') as TgUser;
+    if (!user?.id || !user.first_name) return null;
     return {
       id: user.id,
       first_name: user.first_name,
@@ -36,5 +50,46 @@ export function validateInitData(initData: string, botToken: string): TgUser | n
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Canonical native-client payload (no ambiguous `:` separators).
+ * firstName may contain any characters.
+ */
+export function nativePayload(userId: number, firstName: string, timestamp: number): string {
+  return `v1\nuserId=${userId}\ntimestamp=${timestamp}\nfirstName=${firstName}`;
+}
+
+export function signNative(
+  secret: string,
+  userId: number,
+  firstName: string,
+  timestamp: number,
+): string {
+  return createHmac('sha256', secret).update(nativePayload(userId, firstName, timestamp)).digest('hex');
+}
+
+/** Verify HMAC for native Android client. TTL ±300s. */
+export function verifyNativeSignature(
+  secret: string,
+  userId: number,
+  firstName: string,
+  timestamp: number,
+  signature: string,
+  maxSkewSeconds = 300,
+): boolean {
+  if (!secret || !signature) return false;
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(timestamp) || Math.abs(now - timestamp) > maxSkewSeconds) return false;
+
+  const expected = signNative(secret, userId, firstName, timestamp);
+  try {
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(signature, 'utf8');
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
   }
 }
