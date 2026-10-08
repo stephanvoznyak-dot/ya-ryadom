@@ -4,8 +4,10 @@ import {
   takeOrder,
   myTaken,
   completeOrder,
+  cancelOrder,
   type NearbyItem,
   type MineItem,
+  type Contact,
 } from '../lib/api';
 import { getUserLocation } from '../lib/location';
 
@@ -40,6 +42,9 @@ export function NearbyOrders({
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [emptyHint, setEmptyHint] = useState<string | null>(null);
+  const [suggestedRadius, setSuggestedRadius] = useState<number | null>(null);
+  const [lastContact, setLastContact] = useState<Contact | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   const loadMine = useCallback(async () => {
@@ -65,6 +70,8 @@ export function NearbyOrders({
       }
       const res = await nearby(initData, lat, lng, r);
       setItems(res.items);
+      setEmptyHint(res.hint ?? null);
+      setSuggestedRadius(res.suggestedRadiusMeters ?? null);
       await loadMine();
     } catch (e) {
       setItems([]);
@@ -85,12 +92,16 @@ export function NearbyOrders({
     if (busyId) return;
     setBusyId(id);
     setMsg(null);
+    setLastContact(null);
     try {
       const r = await takeOrder(initData, id);
+      setLastContact(r.contact ?? null);
       setMsg(
-        r.notifications?.creatorNotified
-          ? 'Заявка взята. Заказчик уведомлён.'
-          : 'Заявка взята.',
+        r.contact?.telegramLink
+          ? 'Заявка взята. Напишите заказчику в Telegram.'
+          : r.notifications?.creatorNotified
+            ? 'Заявка взята. Заказчик уведомлён в боте.'
+            : 'Заявка взята.',
       );
       setItems((prev) => prev.filter((x) => x.id !== id));
       await loadMine();
@@ -118,6 +129,22 @@ export function NearbyOrders({
     }
   }
 
+  async function cancel(id: string) {
+    if (busyId) return;
+    setBusyId(id);
+    setMsg(null);
+    try {
+      await cancelOrder(initData, id, 'cancelled_via_miniapp');
+      setMsg('Заявка отменена.');
+      setMine((prev) => prev.filter((x) => x.id !== id));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Не удалось отменить');
+      await loadMine();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="screen">
       <h1 className="title">Я могу</h1>
@@ -134,6 +161,13 @@ export function NearbyOrders({
                 Заказчик: {o.creatorName}
                 {o.creatorUsername ? ` @${o.creatorUsername}` : ''}
               </p>
+              {o.contact?.telegramLink && (
+                <p className="hint">
+                  <a href={o.contact.telegramLink} target="_blank" rel="noreferrer">
+                    Написать в Telegram
+                  </a>
+                </p>
+              )}
               <div className="order-card-footer">
                 <span className="distance">взята вами</span>
                 <button
@@ -143,6 +177,14 @@ export function NearbyOrders({
                   onClick={() => complete(o.id)}
                 >
                   {busyId === o.id ? '…' : 'Завершить'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={!!busyId}
+                  onClick={() => cancel(o.id)}
+                >
+                  Отменить
                 </button>
               </div>
             </div>
@@ -168,6 +210,13 @@ export function NearbyOrders({
       </button>
 
       {msg && <p className="hint">{msg}</p>}
+      {lastContact?.telegramLink && (
+        <p className="hint">
+          <a href={lastContact.telegramLink} target="_blank" rel="noreferrer">
+            {lastContact.hint}
+          </a>
+        </p>
+      )}
       {error && (
         <div className="error-block">
           <p className="error">{error}</p>
@@ -179,7 +228,16 @@ export function NearbyOrders({
 
       {!loading && !error && items.length === 0 && (
         <div className="empty-state">
-          <p>Рядом пока нет заявок.</p>
+          <p>{emptyHint ?? 'Рядом пока нет заявок.'}</p>
+          {suggestedRadius != null && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setRadius(suggestedRadius)}
+            >
+              Расширить до {suggestedRadius / 1000} км
+            </button>
+          )}
         </div>
       )}
 
