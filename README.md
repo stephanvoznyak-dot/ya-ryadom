@@ -2,68 +2,50 @@
 
 Mini App + **тонкий Telegram-клиент** + JSON-store + служебный чат. **Без PostgreSQL.**
 
+Фокус пилота: бытовая помощь и небольшие поручения в **одной зоне**. Аренда жилья не входит в основной сценарий.
+
 ## Инварианты
 
-1. **Одна заявка → один TAKE** — `tryTake()` синхронный (load→check→save без await). **Только один процесс Node** — не масштабируйте реплики бота.
-2. **Источник истины** — `data/orders.json`, не сообщение в Telegram.
-3. **GPS** — только внутри store для nearby; в API пользователям не отдаётся. После COMPLETE/CANCEL координаты обнуляются.
-4. **Служебный чат** — хроника; после TAKE сообщение редактируется, строка 📍 убирается.
-5. **Расстояние в `/nearby`** — отдаётся в корзинах (bucket), не с точностью до метра.
+1. **Одна заявка → один TAKE** — `tryTake()` синхронный. **Только один процесс Node**.
+2. **Источник истины** — `data/orders.json`.
+3. **GPS** — только внутри store; после COMPLETE/CANCEL обнуляется.
+4. **Служебный чат** — хроника, не БД.
+5. **Расстояние в `/nearby`** — buckets.
+6. **Контакт после TAKE** — username / t.me, без телефона и точных координат.
 
-## Безопасность (кратко)
+## Жизненный цикл
+
+| Состояние | Кто меняет |
+|-----------|------------|
+| OPEN | создатель (create / cancel) |
+| TAKEN | исполнитель (take); создатель или исполнитель (cancel) |
+| COMPLETED | только исполнитель |
+| CANCELLED | с `cancelReason` |
+
+## Безопасность
 
 | Тема | Статус |
 |------|--------|
-| `initData` | HMAC + `auth_date` TTL 1 час |
-| Native client | HMAC-SHA256, каноничный payload `v1\nuserId=…`, TTL ±300 с, `timingSafeEqual` |
-| `/nearby`, `/take` | In-memory rate limit (на процесс) |
-| `radiusMeters` | Только whitelist 1/2/5/10/20 км |
-| `complete` | Только исполнитель (`takerTelegramId`) |
-| `take` | Свою заявку взять нельзя |
-| TLS | nginx на :80; HTTPS терминировать выше или раскомментировать блок в `deploy/nginx.conf` |
+| initData | HMAC + auth_date TTL 1ч |
+| Native client | HMAC v1 payload, TTL ±300с, timingSafeEqual |
+| CORS | whitelist WEB_APP_URL + localhost |
+| Rate limit | create / nearby / take / cancel |
+| complete / cancel | проверка прав на сервере |
 
-**Важно:** `NATIVE_CLIENT_SECRET` попадает в APK. Это shared-secret против случайных запросов, не полноценная аутентификация уровня Telegram Login. При утечке — перевыпустить секрет и пересобрать клиент.
-
-## Тонкий клиент (бот)
-
-| Действие | Как |
-|----------|-----|
-| Создать заявку | «Мне нужно» → геолокация → категория → описание → радиус |
-| Найти рядом | «Я могу» → геолокация → радиус → «Взять» |
-| Мои взятые | «Мои заявки» → «Завершить» |
-| Mini App | Кнопка «Mini App» или `/app` |
-
-Полная реализация диалогов, служебного чата и уведомлений — в `apps/bot/src/index.ts`.
+**Важно:** NATIVE_CLIENT_SECRET в APK — shared-secret, не Telegram Login.
 
 ## Запуск
 
 ```bash
 cp .env.example .env
-# TOKEN, SERVICE_CHAT_ID, WEB_APP_URL, NATIVE_CLIENT_SECRET
-
 pnpm install
-pnpm --filter @ya-ryadom/bot smoke   # атомарность TAKE
+pnpm --filter @ya-ryadom/bot smoke
 pnpm dev:bot
 pnpm dev:web
 ```
 
-Production:
+Production: `pnpm build:web && docker compose up -d` (replicas=1).
 
-```bash
-pnpm build:web
-docker compose up -d   # bot replicas = 1
-```
+Метрики: `data/events.jsonl`. Бэкап: `orders.json.bak`.
 
-`SERVICE_CHAT_ID` — закрытая группа, бот админ, пользователей приложения не добавлять.
-
-## Native Telegram X
-
-Канонический модуль: **`android-module/`** (Controller, API, Screens, LocationHelper, INTEGRATION.md).
-
-См. `android-module/INTEGRATION.md` и форк https://github.com/stephanvoznyak-dot/telegram-x
-
-Каталог `ya-ryadom-module/` — устаревший дубликат; не использовать.
-
-## Лицензия
-
-Private experimental project. Форк Telegram X (GPLv3) при распространении APK обязывает открыть исходники модуля.
+Native: `android-module/` + форк telegram-x.

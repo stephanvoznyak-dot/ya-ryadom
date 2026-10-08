@@ -20,7 +20,9 @@ async function request<T>(path: string, body: unknown): Promise<T> {
       const j = await res.json();
       code = j?.error;
       message = j?.message ?? j?.error ?? message;
-    } catch { /* */ }
+    } catch {
+      /* */
+    }
     throw new ApiError(res.status, message, code);
   }
   return res.json() as Promise<T>;
@@ -31,6 +33,13 @@ export type User = {
   firstName: string;
   lastName: string | null;
   username: string | null;
+};
+
+export type Contact = {
+  name: string;
+  username: string | null;
+  telegramLink: string | null;
+  hint: string;
 };
 
 export function auth(initData: string) {
@@ -71,7 +80,12 @@ export function nearby(
   longitude: number,
   radiusMeters: number,
 ) {
-  return request<{ items: NearbyItem[] }>('/api/orders/nearby', {
+  return request<{
+    items: NearbyItem[];
+    empty?: boolean;
+    hint?: string;
+    suggestedRadiusMeters?: number | null;
+  }>('/api/orders/nearby', {
     initData,
     latitude,
     longitude,
@@ -85,6 +99,7 @@ export function takeOrder(initData: string, orderId: string) {
     status: string;
     message: string;
     notifications?: { creatorNotified: boolean; takerNotified: boolean };
+    contact?: Contact;
   }>('/api/orders/take', { initData, orderId });
 }
 
@@ -96,6 +111,7 @@ export type MineItem = {
   status: string;
   creatorName: string;
   creatorUsername: string | null;
+  contact?: Contact;
 };
 
 export function myTaken(initData: string) {
@@ -107,4 +123,11 @@ export function completeOrder(initData: string, orderId: string) {
     initData,
     orderId,
   });
+}
+
+export function cancelOrder(initData: string, orderId: string, reason: string) {
+  return request<{ id: string; status: string; message: string; reason?: string }>(
+    '/api/orders/cancel',
+    { initData, orderId, reason },
+  );
 }
