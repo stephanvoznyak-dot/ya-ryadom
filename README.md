@@ -33,6 +33,8 @@ Mini App + **тонкий Telegram-клиент** + JSON-store + служебн�
 | Мои взятые | «Мои заявки» → «Завершить» |
 | Mini App | Кнопка «Mini App» или `/app` |
 
+Полная реализация диалогов, служебного чата и уведомлений — в `apps/bot/src/index.ts`.
+
 ## Запуск
 
 ```bash
@@ -56,7 +58,11 @@ docker compose up -d   # bot replicas = 1
 
 ## Native Telegram X
 
-См. `ya-ryadom-module/INTEGRATION.md` и форк https://github.com/stephanvoznyak-dot/telegram-x
+Канонический модуль: **`android-module/`** (Controller, API, Screens, LocationHelper, INTEGRATION.md).
+
+См. `android-module/INTEGRATION.md` и форк https://github.com/stephanvoznyak-dot/telegram-x
+
+Каталог `ya-ryadom-module/` — устаревший дубликат; не использовать.
 
 ## Лицензия
 
