@@ -8,14 +8,9 @@ const CAT: Record<string, string> = {
   SHOPPING: 'Купить / принести',
   COMPUTER: 'Компьютер',
   HELP: 'Помощь',
-  RENTAL: 'Аренда',
   OTHER: 'Другое',
 };
 
-/**
- * Bucket exact distance to reduce trilateration risk via /nearby.
- * Buckets: <100, 100–250, 250–500, 500–1000, then 1 km steps.
- */
 export function bucketDistanceMeters(dist: number): number {
   if (dist < 100) return 50;
   if (dist < 250) return 200;
@@ -24,7 +19,6 @@ export function bucketDistanceMeters(dist: number): number {
   return Math.round(dist / 1000) * 1000;
 }
 
-/** Full message for service chat (includes GPS — operators only) */
 export function formatServiceMessage(order: Order, withGps: boolean): string {
   const lines = [
     `📋 ${CAT[order.category] ?? order.category}`,
@@ -38,14 +32,19 @@ export function formatServiceMessage(order: Order, withGps: boolean): string {
   lines.push(`От: ${order.creatorName}${order.creatorUsername ? ` @${order.creatorUsername}` : ''}`);
   lines.push(`id:${order.id}`);
   if (order.status === 'TAKEN' || order.status === 'COMPLETED') {
-    lines.push(`✅ Взял: ${order.takerName ?? ''}${order.takerUsername ? ` @${order.takerUsername}` : ''}`);
+    lines.push(
+      `✅ Взял: ${order.takerName ?? ''}${order.takerUsername ? ` @${order.takerUsername}` : ''}`,
+    );
   }
   if (order.status === 'COMPLETED') lines.push('✔️ Выполнена');
-  if (order.status === 'CANCELLED') lines.push('⛔ Отменена / истекла');
+  if (order.status === 'CANCELLED') {
+    lines.push(
+      `⛔ Отменена${order.cancelReason ? `: ${order.cancelReason}` : ' / истекла'}`,
+    );
+  }
   return lines.join('\n');
 }
 
-/** Public card for Mini App — never exposes exact coords of others */
 export function toPublicCard(
   order: Order,
   distanceMeters?: number,
@@ -67,5 +66,28 @@ export function toPublicCard(
       distanceMeters === undefined ? undefined : bucketDistanceMeters(distanceMeters),
     status: order.status,
     creatorName: order.creatorName,
+  };
+}
+
+export function contactCard(order: Order, perspective: 'creator' | 'taker') {
+  if (perspective === 'taker') {
+    return {
+      name: order.creatorName,
+      username: order.creatorUsername,
+      telegramLink: order.creatorUsername
+        ? `https://t.me/${order.creatorUsername}`
+        : null,
+      hint: order.creatorUsername
+        ? 'Напишите заказчику в Telegram'
+        : 'У заказчика нет username — дождитесь сообщения в боте',
+    };
+  }
+  return {
+    name: order.takerName ?? '',
+    username: order.takerUsername ?? null,
+    telegramLink: order.takerUsername ? `https://t.me/${order.takerUsername}` : null,
+    hint: order.takerUsername
+      ? 'Напишите исполнителю в Telegram'
+      : 'У исполнителя нет username — свяжитесь через бота',
   };
 }
