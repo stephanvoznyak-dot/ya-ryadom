@@ -101,7 +101,6 @@ function save(orders: Order[]) {
   fs.renameSync(tmp, FILE);
 }
 
-/** Append one metric line (no PII beyond numeric userId). */
 export function appendEvent(ev: Omit<MetricEvent, 'at'> & { at?: string }) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -191,7 +190,6 @@ export function tryTake(
   const orders = load();
   const i = orders.findIndex((o) => o.id === orderId);
   if (i < 0) return null;
-
   const o = orders[i];
   if (o.status !== 'OPEN') return null;
   if (new Date(o.expiresAt).getTime() <= Date.now()) {
@@ -206,7 +204,6 @@ export function tryTake(
     return null;
   }
   if (o.creatorTelegramId === taker.telegramId) return null;
-
   orders[i] = {
     ...o,
     status: 'TAKEN',
@@ -251,7 +248,6 @@ export function tryComplete(orderId: string, telegramUserId: number): Order | nu
   const o = orders[i];
   if (o.status !== 'TAKEN') return null;
   if (o.takerTelegramId !== telegramUserId) return null;
-
   orders[i] = scrubCoords({
     ...o,
     status: 'COMPLETED',
@@ -276,7 +272,6 @@ export function tryCancel(
   const i = orders.findIndex((o) => o.id === orderId);
   if (i < 0) return null;
   const o = orders[i];
-
   if (o.status === 'OPEN') {
     if (o.creatorTelegramId !== telegramUserId) return null;
   } else if (o.status === 'TAKEN') {
@@ -289,7 +284,6 @@ export function tryCancel(
   } else {
     return null;
   }
-
   const safeReason = reason.trim().slice(0, 200) || 'unspecified';
   orders[i] = scrubCoords({
     ...o,
