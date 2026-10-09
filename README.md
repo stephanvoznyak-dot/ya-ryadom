@@ -2,7 +2,7 @@
 
 Mini App + **тонкий Telegram-клиент** + JSON-store + служебный чат. **Без PostgreSQL.**
 
-Фокус пилота: бытовая помощь и небольшие поручения в **одной зоне**. Аренда жилья не входит в основной сценарий.
+Фокус пилота: бытовая помощь в **одной зоне**. Аренда жилья не входит в основной сценарий.
 
 ## Инварианты
 
@@ -28,7 +28,7 @@ Mini App + **тонкий Telegram-клиент** + JSON-store + служебн�
 |------|--------|
 | initData | HMAC + auth_date TTL 1ч |
 | Native client | HMAC v1 payload, TTL ±300с, timingSafeEqual |
-| CORS | whitelist WEB_APP_URL + localhost |
+| CORS | exact origin: WEB_APP_URL + CORS_ORIGINS + localhost |
 | Rate limit | create / nearby / take / cancel |
 | complete / cancel | проверка прав на сервере |
 
@@ -44,8 +44,15 @@ pnpm dev:bot
 pnpm dev:web
 ```
 
-Production: `pnpm build:web && docker compose up -d` (replicas=1).
+Production: см. `deploy/DEPLOY.md` (`pnpm build:web && docker compose up -d --build`, replicas=1).
 
 Метрики: `data/events.jsonl`. Бэкап: `orders.json.bak`.
 
 Native: `android-module/` + форк telegram-x.
+
+## Операционные заметки (аудит 2026-10-09)
+
+- CORS: только точные origin из `WEB_APP_URL` + `CORS_ORIGINS` + localhost dev.
+- Compose: volume только `bot-data` → `/app/data`, без mount всего репозитория.
+- Перед деплоем: `pnpm build:web`, затем `docker compose up -d --build`.
+- Не масштабировать реплики бота.
