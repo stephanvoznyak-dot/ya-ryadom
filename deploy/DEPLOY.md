@@ -16,6 +16,9 @@ cp .env.example .env
 # Set TELEGRAM_BOT_TOKEN, SERVICE_CHAT_ID, WEB_APP_URL=https://your-domain.com
 # Optional: NATIVE_CLIENT_SECRET, CORS_ORIGINS
 
+# Restore full P0 index.ts (cancel, contact, exact CORS) if parts are present:
+bash deploy/restore-index.sh
+
 corepack enable
 pnpm install
 pnpm --filter @ya-ryadom/bot smoke
@@ -43,3 +46,4 @@ docker compose up -d
 - `deploy.replicas` for bot must stay **1**
 - Source of truth: `data/orders.json` (volume `bot-data`)
 - Metrics: `data/events.jsonl` inside the volume
+- Full bot entrypoint: `apps/bot/src/index.ts` (after `restore-index.sh` if using GH parts)
