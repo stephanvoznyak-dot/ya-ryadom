@@ -69,6 +69,7 @@ export type NearbyItem = {
   category: string;
   description: string;
   destinationText?: string;
+  distanceBucket?: string;
   distanceMeters?: number;
   status: string;
   creatorName: string;
@@ -122,6 +123,14 @@ export function completeOrder(initData: string, orderId: string) {
   return request<{ id: string; status: string; message: string }>('/api/orders/complete', {
     initData,
     orderId,
+  });
+}
+
+export function cancelOrder(initData: string, orderId: string, reason: string) {
+  return request<{ id: string; status: string; message: string }>('/api/orders/cancel', {
+    initData,
+    orderId,
+    reason,
   });
 }
 

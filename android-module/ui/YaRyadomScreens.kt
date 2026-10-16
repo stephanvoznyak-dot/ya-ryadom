@@ -237,7 +237,7 @@ object YaRyadomScreens {
             setTextColor(t.textPrimary); setPadding(0, dp(context, 4), 0, dp(context, 6))
         })
         card.addView(TextView(context).apply {
-            val dist = item.distanceMeters?.let { "${it} м · " } ?: ""
+            val dist = item.distanceBucket?.let { "$it · " } ?: ""
             text = "$dist${item.creatorName}"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setTextColor(t.textSecondary)
         })

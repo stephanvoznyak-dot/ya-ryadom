@@ -8,6 +8,7 @@ const CAT: Record<string, string> = {
   SHOPPING: 'Купить / принести',
   COMPUTER: 'Компьютер',
   HELP: 'Помощь',
+  RENTAL: 'Прокат',
   OTHER: 'Другое',
 };
 
@@ -17,6 +18,16 @@ export function bucketDistanceMeters(dist: number): number {
   if (dist < 500) return 400;
   if (dist < 1000) return 750;
   return Math.round(dist / 1000) * 1000;
+}
+
+/** Public label. Exact meters never leave the matcher. */
+export function distanceBucketLabel(dist: number): string {
+  if (dist < 300) return 'рядом';
+  if (dist < 1000) return 'до 1 км';
+  if (dist < 2000) return 'до 2 км';
+  if (dist < 5000) return 'до 5 км';
+  if (dist < 10000) return 'до 10 км';
+  return 'до 20 км';
 }
 
 export function formatServiceMessage(order: Order, withGps: boolean): string {
@@ -53,7 +64,7 @@ export function toPublicCard(
   category: string;
   description: string;
   destinationText?: string;
-  distanceMeters?: number;
+  distanceBucket?: string;
   status: string;
   creatorName: string;
 } {
@@ -62,8 +73,8 @@ export function toPublicCard(
     category: order.category,
     description: order.description,
     destinationText: order.destinationText,
-    distanceMeters:
-      distanceMeters === undefined ? undefined : bucketDistanceMeters(distanceMeters),
+    distanceBucket:
+      distanceMeters === undefined ? undefined : distanceBucketLabel(distanceMeters),
     status: order.status,
     creatorName: order.creatorName,
   };

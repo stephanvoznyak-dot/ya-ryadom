@@ -33,7 +33,7 @@ data class NearbyItem(
     val category: String,
     val description: String,
     val destinationText: String? = null,
-    val distanceMeters: Int? = null,
+    val distanceBucket: String? = null,
     val status: String,
     val creatorName: String
 )
@@ -77,15 +77,15 @@ data class CompleteResponse(
 /** Categories — keep in sync with backend enum */
 object Categories {
     val ALL = listOf(
-        "DELIVERY" to "Delivery",
-        "RIDE" to "Ride",
-        "HELP" to "Help",
-        "SHOPPING" to "Shopping",
-        "REPAIR" to "Repair",
-        "CLEANING" to "Cleaning",
-        "COMPUTER" to "Computer",
-        "RENTAL" to "Rental",
-        "OTHER" to "Other"
+        "DELIVERY" to "Доставка",
+        "RIDE" to "Поездка",
+        "HELP" to "Помощь",
+        "SHOPPING" to "Купить",
+        "REPAIR" to "Ремонт",
+        "CLEANING" to "Уборка",
+        "COMPUTER" to "Компьютер",
+        "RENTAL" to "Прокат",
+        "OTHER" to "Другое"
     )
 
     fun label(code: String): String =

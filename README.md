@@ -1,58 +1,76 @@
-# Я рядом — экспериментальный MVP
+# Я рядом
 
-Mini App + **тонкий Telegram-клиент** + JSON-store + служебный чат. **Без PostgreSQL.**
+Mini App + тонкий Telegram-клиент + JSON-журнал заявок + служебная хроника.
+Взаимная помощь рядом. **Без PostgreSQL.** Одна заявка — один TAKE.
 
-Фокус пилота: бытовая помощь в **одной зоне**. Аренда жилья не входит в основной сценарий.
+Репозиторий: [github.com/stephanvoznyak-dot/ya-ryadom](https://github.com/stephanvoznyak-dot/ya-ryadom)
+
+Версия **0.5.0**
+
+Подтянуто из [github.com/stephanvoznyak-dot/ya-ryadom](https://github.com/stephanvoznyak-dot/ya-ryadom): бот с REST API, Mini App, модуль Telegram X.
+
+Исправлено в этой версии:
+
+- создание заявки в боте снова собирает объект (обрыв `addOrder` ломал API)
+- лента и бот отдают диапазон дистанции (`рядом`, `до 1 км`…), не точные метры
+- отмена с причиной доступна в API и в диалоге бота; координаты обнуляются
+- после TAKE в ответе есть username заказчика, без GPS
+- CORS только для адреса Mini App и localhost; лимиты на создание, поиск, TAKE и отмену
+- журнал пишется с `orders.json.bak` и `events.jsonl`, просроченные заявки снимаются сами
+- HMAC нативного клиента сравнивается по байтам подписи
 
 ## Инварианты
 
-1. **Одна заявка → один TAKE** — `tryTake()` синхронный. **Только один процесс Node**.
-2. **Источник истины** — `data/orders.json`.
-3. **GPS** — только внутри store; после COMPLETE/CANCEL обнуляется.
-4. **Служебный чат** — хроника, не БД.
-5. **Расстояние в `/nearby`** — buckets.
-6. **Контакт после TAKE** — username / t.me, без телефона и точных координат.
+1. **Одна OPEN-заявка → один победитель TAKE** — `tryTake()` синхронный (load → check → save без await).
+2. **Источник истины** — журнал заявок, не сообщение в Telegram.
+3. **GPS** только внутри store для nearby; в карточки ленты не попадает.
+4. **Служебный чат / хроника** — после TAKE координаты снимаются.
 
-## Жизненный цикл
+## Что в комплекте
 
-| Состояние | Кто меняет |
-|-----------|------------|
-| OPEN | создатель (create / cancel) |
-| TAKEN | исполнитель (take); создатель или исполнитель (cancel) |
-| COMPLETED | только исполнитель |
-| CANCELLED | с `cancelReason` |
+| Каталог | Что это |
+|---------|---------|
+| `apps/web/` | Telegram Mini App |
+| `apps/bot/` | Telegram-бот и JSON-журнал |
+| `android-module/` | Модуль для Telegram X |
+| `native/ios/` | Проект Xcode / SwiftUI |
+| `native/android/` | Android / Compose, сборка APK |
+| `src/` | Демо в превью (если открыто вместе с оболочкой) |
 
-## Безопасность
+## Веб
 
-| Тема | Статус |
-|------|--------|
-| initData | HMAC + auth_date TTL 1ч |
-| Native client | HMAC v1 payload, TTL ±300с, timingSafeEqual |
-| CORS | exact origin: WEB_APP_URL + CORS_ORIGINS + localhost |
-| Rate limit | create / nearby / take / cancel |
-| complete / cancel | проверка прав на сервере |
+Демо работает без Telegram: две персоны (Анна / Максим), чтобы проверить атомарный TAKE.
+Вкладка **Код** скачивает ZIP исходников.
 
-**Важно:** NATIVE_CLIENT_SECRET в APK — shared-secret, не Telegram Login.
+## Xcode
 
-## Запуск
-
-```bash
-cp .env.example .env
-pnpm install
-pnpm --filter @ya-ryadom/bot smoke
-pnpm dev:bot
-pnpm dev:web
+```
+native/ios/YaRyadom.xcodeproj
 ```
 
-Production: см. `deploy/DEPLOY.md` (`pnpm build:web && docker compose up -d --build`, replicas=1).
+Откройте на Mac, выберите iPhone Simulator, Run. Signing: ваш Team в target YaRyadom.
 
-Метрики: `data/events.jsonl`. Бэкап: `orders.json.bak`.
+## Android APK
 
-Native: `android-module/` + форк telegram-x.
+```
+cd native/android
+# Android Studio → Open → native/android → Build APK
+```
 
-## Операционные заметки (аудит 2026-10-09)
+Либо GitHub Actions: workflow **Android APK** → артефакт `ya-ryadom-debug-apk`.
 
-- CORS: только точные origin из `WEB_APP_URL` + `CORS_ORIGINS` + localhost dev.
-- Compose: volume только `bot-data` → `/app/data`, без mount всего репозитория.
-- Перед деплоем: `pnpm build:web`, затем `docker compose up -d --build`.
-- Не масштабировать реплики бота.
+Debug APK не для магазина — только установка на своё устройство.
+
+## Бот
+
+```
+cd apps/bot
+cp .env.example .env
+# TOKEN, WEB_APP_URL, SERVICE_CHAT_ID, NATIVE_CLIENT_SECRET
+npx tsx src/smoke-take.ts
+npx tsx src/index.ts
+```
+
+## Лицензия
+
+Прототип. Не production без аудита.

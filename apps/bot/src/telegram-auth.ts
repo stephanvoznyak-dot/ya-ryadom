@@ -83,13 +83,10 @@ export function verifyNativeSignature(
   const now = Math.floor(Date.now() / 1000);
   if (!Number.isFinite(timestamp) || Math.abs(now - timestamp) > maxSkewSeconds) return false;
 
-  const expected = signNative(secret, userId, firstName, timestamp);
-  try {
-    const a = Buffer.from(expected, 'utf8');
-    const b = Buffer.from(signature, 'utf8');
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  const expected = createHmac('sha256', secret)
+    .update(nativePayload(userId, firstName, timestamp))
+    .digest();
+  const given = Buffer.from(signature, 'hex');
+  if (given.length !== expected.length) return false;
+  return timingSafeEqual(given, expected);
 }

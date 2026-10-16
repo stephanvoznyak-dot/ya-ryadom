@@ -19,15 +19,17 @@ import { validateInitData, verifyNativeSignature } from './telegram-auth.js';
 import {
   addOrder,
   getOrder,
+  listCreatedActive,
   listOrders,
   listTakenBy,
   pruneExpired,
+  tryCancel,
   tryComplete,
   tryTake,
   updateOrder,
 } from './store.js';
 import { distanceMeters } from './geo.js';
-import { bucketDistanceMeters, formatServiceMessage, toPublicCard } from './messages.js';
+import { distanceBucketLabel, formatServiceMessage, toPublicCard } from './messages.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SERVICE_CHAT_ID = process.env.SERVICE_CHAT_ID; // e.g. -100xxxxxxxxxx
@@ -61,7 +63,7 @@ const CATEGORY_LABELS: Record<(typeof CATEGORIES)[number], string> = {
   SHOPPING: 'Купить / принести',
   COMPUTER: 'Компьютер',
   HELP: 'Помощь',
-  RENTAL: 'Аренда',
+  RENTAL: 'Прокат',
   OTHER: 'Другое',
 };
 
@@ -245,7 +247,21 @@ function rateLimit(key: string, limit: number, windowMs: number): boolean {
 }
 
 const app = Fastify({ logger: false });
-await app.register(cors, { origin: true });
+const allowedOrigins = new Set(
+  [
+    WEB_APP_URL,
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+  ].filter((o) => o && o !== 'https://example.com'),
+);
+await app.register(cors, {
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.has(origin)) cb(null, true);
+    else cb(null, false);
+  },
+});
 
 app.get('/health', async () => ({ status: 'ok' }));
 
@@ -284,6 +300,9 @@ app.post('/api/orders', async (req, reply) => {
   if (!parsed.success) return reply.status(400).send({ error: 'Validation failed' });
   const user = resolveUser(parsed.data);
   if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
+  if (!rateLimit(`create:${user.id}`, 8, 60_000)) {
+    return reply.status(429).send({ error: 'RATE_LIMITED' });
+  }
   const d = parsed.data;
   const order = addOrder({
     category: d.category,
@@ -335,10 +354,11 @@ app.post('/api/orders/nearby', async (req, reply) => {
     })
     .map((o) => {
       const dist = distanceMeters(latitude, longitude, o.latitude, o.longitude);
-      return toPublicCard(o, dist);
+      return { card: toPublicCard(o, dist), dist };
     })
-    .sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0))
-    .slice(0, 30);
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 30)
+    .map((x) => x.card);
   return reply.send({ items });
 });
 
@@ -397,6 +417,13 @@ app.post('/api/orders/take', async (req, reply) => {
     id: updated.id,
     status: 'TAKEN',
     message: 'Заявка взята',
+    contact: {
+      name: updated.creatorName,
+      username: updated.creatorUsername,
+      telegramLink: updated.creatorUsername
+        ? `https://t.me/${updated.creatorUsername}`
+        : null,
+    },
     notifications: { creatorNotified, takerNotified },
   });
 });
@@ -418,7 +445,16 @@ app.post('/api/orders/mine', async (req, reply) => {
     creatorName: o.creatorName,
     creatorUsername: o.creatorUsername,
   }));
-  return reply.send({ items });
+  const created = listCreatedActive(user.id).map((o) => ({
+    id: o.id,
+    category: o.category,
+    description: o.description,
+    destinationText: o.destinationText,
+    status: o.status,
+    takerName: o.takerName ?? null,
+    takerUsername: o.takerUsername ?? null,
+  }));
+  return reply.send({ items, created });
 });
 
 const orderIdSchema = z.object({
@@ -452,6 +488,34 @@ app.post('/api/orders/complete', async (req, reply) => {
     id: updated.id,
     status: 'COMPLETED',
     message: 'Заявка выполнена',
+  });
+});
+
+const CANCEL_REASONS = ['changed_mind', 'found_help', 'no_show', 'other'] as const;
+
+const cancelSchema = z.object({
+  initData: z.string().min(1).optional(),
+  ...nativeUserFields,
+  orderId: z.string().uuid(),
+  reason: z.enum(CANCEL_REASONS),
+});
+
+app.post('/api/orders/cancel', async (req, reply) => {
+  const parsed = cancelSchema.safeParse(req.body);
+  if (!parsed.success) return reply.status(400).send({ error: 'BAD_REQUEST' });
+  const user = resolveUser(parsed.data);
+  if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
+  if (!rateLimit(`cancel:${user.id}`, 10, 60_000)) {
+    return reply.status(429).send({ error: 'RATE_LIMITED' });
+  }
+  const updated = tryCancel(parsed.data.orderId, user.id, parsed.data.reason);
+  if (!updated) return reply.status(403).send({ error: 'FORBIDDEN' });
+  await stripGpsFromService(updated);
+  return reply.send({
+    id: updated.id,
+    status: 'CANCELLED',
+    cancelReason: updated.cancelReason,
+    message: 'Заявка отменена',
   });
 });
 
@@ -512,19 +576,35 @@ bot.hears('Мои заявки', async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   pruneExpired();
-  const items = listTakenBy(userId);
-  if (items.length === 0) {
-    await ctx.reply('У вас нет взятых заявок.', { reply_markup: mainKeyboard() });
+  const taken = listTakenBy(userId);
+  const created = listCreatedActive(userId);
+  if (taken.length === 0 && created.length === 0) {
+    await ctx.reply('Нет активных заявок.', { reply_markup: mainKeyboard() });
     return;
   }
-  for (const o of items) {
+  for (const o of taken) {
     const label = CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category;
     await ctx.reply(
-      `${label}\n${o.description}${o.destinationText ? `\n→ ${o.destinationText}` : ''}\nОт: ${o.creatorName}${o.creatorUsername ? ` @${o.creatorUsername}` : ''}`,
+      `В работе · ${label}\n${o.description}${o.destinationText ? `\n→ ${o.destinationText}` : ''}\nОт: ${o.creatorName}${o.creatorUsername ? ` @${o.creatorUsername}` : ''}`,
       {
-        reply_markup: new InlineKeyboard().text('Завершить', `complete:${o.id}`),
+        reply_markup: new InlineKeyboard()
+          .text('Завершить', `complete:${o.id}`)
+          .row()
+          .text('Отменить', `xcancel:${o.id}:changed_mind`),
       },
     );
+  }
+  for (const o of created) {
+    const label = CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category;
+    const who =
+      o.status === 'TAKEN'
+        ? `\nВзял: ${o.takerName ?? ''}${o.takerUsername ? ` @${o.takerUsername}` : ''}`
+        : '';
+    await ctx.reply(`Моя · ${label}\n${o.description}${who}`, {
+      reply_markup: new InlineKeyboard()
+        .text('Передумал', `xcancel:${o.id}:changed_mind`)
+        .text('Уже помогли', `xcancel:${o.id}:found_help`),
+    });
   }
 });
 
@@ -568,12 +648,13 @@ bot.on('callback_query:data', async (ctx) => {
   }
 
   if (data.startsWith('cat:')) {
-    const cat = data.slice(4) as (typeof CATEGORIES)[number];
+    const cat = data.slice(4);
+    if (!(CATEGORIES as readonly string[]).includes(cat)) return;
     const session = getSession(userId);
     if (session.step !== 'create_category') return;
     setSession(userId, {
       step: 'create_description',
-      draft: { ...session.draft, category: cat },
+      draft: { ...session.draft, category: cat as (typeof CATEGORIES)[number] },
     });
     await ctx.reply('Опишите, что нужно (текстом):');
     return;
@@ -610,7 +691,7 @@ bot.on('callback_query:data', async (ctx) => {
       })
       .map((o) => {
         const dist = distanceMeters(session.latitude, session.longitude, o.latitude, o.longitude);
-        return { order: o, dist: bucketDistanceMeters(dist) };
+        return { order: o, label: distanceBucketLabel(dist), dist };
       })
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 15);
@@ -620,11 +701,10 @@ bot.on('callback_query:data', async (ctx) => {
       await ctx.reply('Рядом пока нет открытых заявок.', { reply_markup: mainKeyboard() });
       return;
     }
-    for (const { order: o, dist } of items) {
-      const label = CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category;
-      const distLabel = dist < 1000 ? `~${dist} м` : `~${dist / 1000} км`;
+    for (const { order: o, label } of items) {
+      const cat = CATEGORY_LABELS[o.category as keyof typeof CATEGORY_LABELS] ?? o.category;
       await ctx.reply(
-        `${label} · ${distLabel}\n${o.description}${o.destinationText ? `\n→ ${o.destinationText}` : ''}\nОт: ${o.creatorName}`,
+        `${cat} · ${label}\n${o.description}${o.destinationText ? `\n→ ${o.destinationText}` : ''}\nОт: ${o.creatorName}`,
         {
           reply_markup: new InlineKeyboard().text('Взять', `take:${o.id}`),
         },
@@ -685,6 +765,20 @@ bot.on('callback_query:data', async (ctx) => {
     }
     await ctx.reply('Заявка отмечена как выполненная.', { reply_markup: mainKeyboard() });
     return;
+  }
+
+  if (data.startsWith('xcancel:')) {
+    const parts = data.split(':');
+    const orderId = parts[1];
+    const reason = parts[2];
+    if (!orderId || !reason || !(CANCEL_REASONS as readonly string[]).includes(reason)) return;
+    const updated = tryCancel(orderId, userId, reason);
+    if (!updated) {
+      await ctx.reply('Нельзя отменить эту заявку.');
+      return;
+    }
+    await stripGpsFromService(updated);
+    await ctx.reply('Заявка отменена. Координаты стёрты.', { reply_markup: mainKeyboard() });
   }
 });
 

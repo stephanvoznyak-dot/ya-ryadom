@@ -64,7 +64,7 @@ class YaRyadomApi(
                     category = o.getString("category"),
                     description = o.getString("description"),
                     destinationText = o.optString("destinationText").takeIf { it.isNotEmpty() },
-                    distanceMeters = if (o.has("distanceMeters")) o.getInt("distanceMeters") else null,
+                    distanceBucket = o.optString("distanceBucket").takeIf { it.isNotEmpty() },
                     status = o.getString("status"),
                     creatorName = o.getString("creatorName")
                 )

@@ -23,7 +23,9 @@ const LABELS: Record<string, string> = {
   OTHER: 'Другое',
 };
 
-function dist(m?: number) {
+function dist(item: { distanceBucket?: string; distanceMeters?: number }) {
+  if (item.distanceBucket) return item.distanceBucket;
+  const m = item.distanceMeters;
   if (m == null) return '';
   return m < 1000 ? `${m} м` : `${(m / 1000).toFixed(1).replace('.', ',')} км`;
 }
@@ -248,7 +250,7 @@ export function NearbyOrders({
             <p className="card-desc">{o.description}</p>
             {o.destinationText && <p className="hint">→ {o.destinationText}</p>}
             <div className="order-card-footer">
-              <span className="distance">{dist(o.distanceMeters)}</span>
+              <span className="distance">{dist(o)}</span>
               <button
                 type="button"
                 className="btn btn-primary btn-take"
