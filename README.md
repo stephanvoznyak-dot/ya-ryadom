@@ -5,7 +5,7 @@ Mini App + тонкий Telegram-клиент + JSON-журнал заявок +
 
 Репозиторий: [github.com/stephanvoznyak-dot/ya-ryadom](https://github.com/stephanvoznyak-dot/ya-ryadom)
 
-Версия **0.5.0**
+Версия **0.5.1**
 
 Подтянуто из [github.com/stephanvoznyak-dot/ya-ryadom](https://github.com/stephanvoznyak-dot/ya-ryadom): бот с REST API, Mini App, модуль Telegram X.
 
