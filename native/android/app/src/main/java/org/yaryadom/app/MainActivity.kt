@@ -59,6 +59,18 @@ private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): D
     return 2 * r * Math.asin(Math.min(1.0, Math.sqrt(a)))
 }
 
+private fun bucket(meters: Double): String {
+    if (meters < 300) return "рядом"
+    if (meters < 1000) return "до 1 км"
+    if (meters < 2000) return "до 2 км"
+    if (meters < 5000) return "до 5 км"
+    if (meters < 10000) return "до 10 км"
+    return "до 20 км"
+}
+
+private const val HERE_LAT = 55.751244
+private const val HERE_LNG = 37.618423
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +123,19 @@ fun App() {
         msg = "Выполнена"
     }
 
+    fun cancel(id: String) {
+        val i = orders.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val o = orders[i]
+        val isCreator = o.creatorId == me.id
+        val isTaker = o.status == "TAKEN" && o.takerId == me.id
+        if (o.status == "OPEN" && !isCreator) { msg = "Нельзя отменить"; return }
+        if (o.status == "TAKEN" && !isCreator && !isTaker) { msg = "Нельзя отменить"; return }
+        if (o.status != "OPEN" && o.status != "TAKEN") return
+        orders[i] = o.copy(status = "CANCELLED", showGps = false)
+        msg = "Отменена, координаты стёрты"
+    }
+
     MaterialTheme(
         colorScheme = lightColorScheme(
             primary = sage,
@@ -157,7 +182,13 @@ fun App() {
                     padding,
                     orders.filter { o ->
                         o.status == "OPEN" && o.creatorId != me.id &&
-                            haversine(55.751244, 37.618423, o.latitude, o.longitude) <= minOf(20000, o.radiusMeters)
+                            haversine(HERE_LAT, HERE_LNG, o.latitude, o.longitude) <= minOf(5000.0, o.radiusMeters.toDouble())
+                    },
+                    orders.count { o ->
+                        o.status == "OPEN" && o.creatorId != me.id &&
+                            haversine(HERE_LAT, HERE_LNG, o.latitude, o.longitude).let { d ->
+                                d <= 5000.0 && d > o.radiusMeters.toDouble()
+                            }
                     },
                     msg,
                     ::take,
@@ -167,6 +198,7 @@ fun App() {
                     orders.filter { it.status == "TAKEN" && it.takerId == me.id },
                     orders.filter { it.creatorId == me.id },
                     ::complete,
+                    ::cancel,
                 )
                 else -> SourcePane(padding)
             }
@@ -210,6 +242,7 @@ private fun HomePane(
 private fun NearbyPane(
     padding: PaddingValues,
     items: List<Order>,
+    hidden: Int,
     msg: String,
     onTake: (String) -> Unit,
 ) {
@@ -217,12 +250,15 @@ private fun NearbyPane(
         Modifier.fillMaxSize().padding(padding).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { Text("Расстояние — диапазон, не метры. Радиус поиска 5 км.") }
+        if (hidden > 0) item { Text("Ещё $hidden не показано: дальше радиуса автора.") }
         if (msg.isNotEmpty()) item { Text(msg, color = MaterialTheme.colorScheme.primary) }
         items(items, key = { it.id }) { o ->
+            val label = bucket(haversine(HERE_LAT, HERE_LNG, o.latitude, o.longitude))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(o.category, style = MaterialTheme.typography.labelSmall)
                 Text(o.description)
-                Text("От: ${o.creatorName}", style = MaterialTheme.typography.bodySmall)
+                Text("$label · ${o.creatorName}", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = { onTake(o.id) }) { Text("Взять") }
             }
         }
@@ -235,6 +271,7 @@ private fun MinePane(
     taken: List<Order>,
     created: List<Order>,
     onComplete: (String) -> Unit,
+    onCancel: (String) -> Unit,
 ) {
     LazyColumn(
         Modifier.fillMaxSize().padding(padding).padding(16.dp),
@@ -245,11 +282,17 @@ private fun MinePane(
             Column {
                 Text(o.description)
                 Button(onClick = { onComplete(o.id) }) { Text("Завершить") }
+                OutlinedButton(onClick = { onCancel(o.id) }) { Text("Отменить") }
             }
         }
         item { Text("Созданные") }
-        items(created, key = { it.id }) { o ->
-            Text("${o.status}: ${o.description}")
+        items(created, key = { "c-" + it.id }) { o ->
+            Column {
+                Text("${o.status}: ${o.description}")
+                if (o.status == "OPEN" || o.status == "TAKEN") {
+                    OutlinedButton(onClick = { onCancel(o.id) }) { Text("Отменить") }
+                }
+            }
         }
     }
 }
