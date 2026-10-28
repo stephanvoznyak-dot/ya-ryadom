@@ -19,7 +19,7 @@ Mini App + тонкий Telegram-клиент + JSON-журнал заявок +
 - журнал пишется с `orders.json.bak` и `events.jsonl`, просроченные заявки снимаются сами
 - HMAC нативного клиента сравнивается по байтам подписи
 
-**Статус проверки (28.10.2026 ~12:15 MSK, sandbox):** typecheck для `apps/bot` проходит успешно; smoke-take — все 7 тестов проходят.
+**Статус проверки (28.10.2026 ~13:15 MSK, sandbox):** typecheck для `apps/bot` проходит успешно; smoke-take — все 7 тестов проходят. Обновлён zod до 4.6.7 — high severity vulnerability (GHSA-mrhx-c7xc-m3w5) закрыта, `npm audit` чист.
 
 ## Инварианты
 
